@@ -739,7 +739,7 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 	struct arphdr *arp;
 	unsigned char *arp_ptr;
 	struct rtable *rt;
-	unsigned char *sha;
+	unsigned char *sha; // Target HW adress for ARP reply
 	__be32 sip, tip;
 	u16 dev_type = dev->type;
 	int addr_type;
@@ -754,15 +754,22 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 	if (!in_dev)
 		goto out;
 
-	arp = arp_hdr(skb);
+	arp = arp_hdr(skb); // Get ARP header from sk buff
 
+	/*
+
+	arp_project
+
+	 Sanity check header fields based on the device type.
+	 If failed drop packet.
+	*/
 	switch (dev_type) {
 	default:
 		if (arp->ar_pro != htons(ETH_P_IP) ||
 		    htons(dev_type) != arp->ar_hrd)
 			goto out;
 		break;
-	case ARPHRD_ETHER:
+	case ARPHRD_ETHER:	// Ethernet is here
 	case ARPHRD_FDDI:
 	case ARPHRD_IEEE802:
 		/*
@@ -800,24 +807,39 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 /*
  *	Extract fields
  */
-	arp_ptr = (unsigned char *)(arp + 1);
-	sha	= arp_ptr;
+	arp_ptr = (unsigned char *)(arp + 1); // next to the arp header (start of ARP data)
+	sha	= arp_ptr; // First of the ARP data - Sender HW address
+		  // This is an ARP request. So it will be an ARP reply's target HW address.
 	arp_ptr += dev->addr_len;
-	memcpy(&sip, arp_ptr, 4);
+	memcpy(&sip, arp_ptr, 4); // Get source IP address
 	arp_ptr += 4;
 	switch (dev_type) {
 #if IS_ENABLED(CONFIG_FIREWIRE_NET)
 	case ARPHRD_IEEE1394:
 		break;
 #endif
-	default:
+	default:	// Ethernet is here
+		/*
+
+		arp_project
+
+		 We can set ARP replys's sender HW adress by dev->dev_addr.
+		 So we don't need target HW address from ARP request. Jump it.
+		*/
 		arp_ptr += dev->addr_len;
 	}
-	memcpy(&tip, arp_ptr, 4);
+	memcpy(&tip, arp_ptr, 4); // Get target IP address
 /*
  *	Check for bad requests for 127.x.x.x and requests for multicast
  *	addresses.  If this is one such, delete it.
  */
+	/*
+
+	arp_project
+
+	 If tip is loopback or multicast?
+	 Yes -> Drop packet
+	*/
 	if (ipv4_is_multicast(tip) ||
 	    (!IN_DEV_ROUTE_LOCALNET(in_dev) && ipv4_is_loopback(tip)))
 		goto out;
@@ -851,6 +873,14 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 						    GFP_ATOMIC);
 
 	/* Special case: IPv4 duplicate address detection packet (RFC2131) */
+	/*
+
+	arp_project
+
+	 sip = 0.0.0.0?
+	 Yes -> Is ARP_REQUEST? -> Is tip Local? -> Send ARP_REPLY
+	 No -> Drop packet
+	*/
 	if (sip == 0) {
 		if (arp->ar_op == htons(ARPOP_REQUEST) &&
 		    inet_addr_type_dev_table(net, dev, tip) == RTN_LOCAL &&
@@ -860,21 +890,28 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 		goto out;
 	}
 
-	if (arp->ar_op == htons(ARPOP_REQUEST) &&
-	    ip_route_input_noref(skb, tip, sip, 0, dev) == 0) {
+
+	if (arp->ar_op == htons(ARPOP_REQUEST) && // If REQUEST
+	    ip_route_input_noref(skb, tip, sip, 0, dev) == 0) { // Is there a route between sip & tip?
 
 		rt = skb_rtable(skb);
 		addr_type = rt->rt_type;
 
-		if (addr_type == RTN_LOCAL) {
+		if (addr_type == RTN_LOCAL) { // Is tip local address?
 			int dont_send;
 
+			// ARP filter or ignore?
 			dont_send = arp_ignore(in_dev, sip, tip);
 			if (!dont_send && IN_DEV_ARPFILTER(in_dev))
 				dont_send = arp_filter(sip, tip, dev);
 			if (!dont_send) {
+				// Is there already a neighbour entry for sip?
+				// No -> Create it.
+				// Yes -> Update it.
+				// Return created or updated neigh if succes
 				n = neigh_event_ns(&arp_tbl, sha, &sip, dev);
 				if (n) {
+					// Send ARP reply
 					arp_send_dst(ARPOP_REPLY, ETH_P_ARP,
 						     sip, dev, tip, sha,
 						     dev->dev_addr, sha,
@@ -882,13 +919,16 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 					neigh_release(n);
 				}
 			}
-			goto out;
-		} else if (IN_DEV_FORWARD(in_dev)) {
+			goto out; // End
+		} else if (IN_DEV_FORWARD(in_dev)) { // Is IPv4 forwarding enabled?
+			// Proxy ARP
 			if (addr_type == RTN_UNICAST  &&
 			    (arp_fwd_proxy(in_dev, dev, rt) ||
 			     arp_fwd_pvlan(in_dev, dev, rt, sip, tip) ||
 			     (rt->dst.dev != dev &&
-			      pneigh_lookup(&arp_tbl, net, &tip, dev, 0)))) {
+			      pneigh_lookup(&arp_tbl, net, &tip, dev, 0)))) { // Is the request entry present in the proxy ARP table?
+				// Is there already a neibour entry for sip?
+				// Create or update
 				n = neigh_event_ns(&arp_tbl, sha, &sip, dev);
 				if (n)
 					neigh_release(n);
@@ -905,14 +945,32 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 						       in_dev->arp_parms, skb);
 					goto out_free_dst;
 				}
-				goto out;
+				goto out; // End
 			}
 		}
 	}
 
+	// If REPLY
+
 	/* Update our ARP tables */
 
+	// Is there already a neibour entry for sip?
 	n = __neigh_lookup(&arp_tbl, &sip, dev, 0);
+/////////////////// Reference /////////////////////
+/*
+static inline struct neighbour *
+__neigh_lookup(struct neigh_table *tbl, const void *pkey, struct net_device *dev, int creat)
+{
+	struct neighbour *n = neigh_lookup(tbl, pkey, dev);
+
+	if (n || !creat)
+		return n;
+
+	n = neigh_create(tbl, pkey, dev);
+	return IS_ERR(n) ? NULL : n;
+}
+*/
+///////////////////////////////////////////////////
 
 	if (IN_DEV_ARP_ACCEPT(in_dev)) {
 		unsigned int addr_type = inet_addr_type_dev_table(net, dev, sip);
@@ -934,6 +992,10 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 		int state = NUD_REACHABLE;
 		int override;
 
+		// Is the last update older then locktime?
+		// No -> end
+		// Yes -> Update entry and set state to NUD_STALE
+
 		/* If several different ARP replies follows back-to-back,
 		   use the FIRST one. It is possible, if several proxy
 		   agents are active. Taking the first reply prevents
@@ -953,10 +1015,10 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 		neigh_update(n, sha, state,
 			     override ? NEIGH_UPDATE_F_OVERRIDE : 0);
 		neigh_release(n);
-	}
+	} // End
 
 out:
-	consume_skb(skb);
+	consume_skb(skb); // free an skbuff
 out_free_dst:
 	dst_release(reply_dst);
 	return 0;
