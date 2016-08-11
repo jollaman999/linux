@@ -303,6 +303,79 @@ static void arp_error_report(struct neighbour *neigh, struct sk_buff *skb)
 	kfree_skb(skb);
 }
 
+/*
+ * @dev - net device
+ * @arp - arp header
+ * @count - 0: Recevied ARP, 1: Sending ARP
+ */
+static void arp_print_info(struct net_device *dev, struct arphdr *arp, int count)
+{
+	unsigned char *arp_ptr;
+	unsigned char *ha; // Hardware Address
+	unsigned char ip_tmp[4];
+	unsigned long cur_ms_time;
+	int i;
+
+	cur_ms_time = jiffies_to_usecs(jiffies - init_time);
+	printk(ARP_PROJECT"%s - ======= ARP Info (Time: %lu.%6lus) =======\n", __func__,
+					cur_ms_time / 1000000, cur_ms_time % 1000000);
+
+	/* net_device info */
+	if (count)
+		printk(ARP_PROJECT"%s - Sending dev_addr: ", __func__);
+	else
+		printk(ARP_PROJECT"%s - Received dev_addr: ", __func__);
+	for (i = 0; i < dev->addr_len - 1; i++)
+		printk("%02x:", dev->dev_addr[i]);
+	printk("%02x\n", dev->dev_addr[i]);
+
+	/* operation info */
+	if (arp->ar_op == htons(ARPOP_REQUEST))
+		printk(ARP_PROJECT"%s - Operation: Request(1)\n", __func__);
+	else if (arp->ar_op == htons(ARPOP_REPLY))
+		printk(ARP_PROJECT"%s - Operation: Reply(2)\n", __func__);
+
+	/* Get arp_ptr infos */
+	arp_ptr = (unsigned char *)(arp + 1);
+
+	/* Sender Hardware Address info */
+	ha = arp_ptr; // First of the ARP data - Sender HW address
+	printk(ARP_PROJECT"%s - Sender HW: ", __func__);
+	for (i = 0; i < dev->addr_len - 1; i++)
+		printk("%02x:", ha[i]);
+	printk("%02x\n", ha[i]);
+
+	/* Move pointer */
+	arp_ptr += dev->addr_len;
+
+	/* Sender IP Address info */
+	memcpy(&ip_tmp, arp_ptr, 4);
+	printk(ARP_PROJECT"%s - Sender IP: ", __func__);
+	for (i = 0; i < 3; i++)
+		printk("%d.", ip_tmp[i]);
+	printk("%d\n", ip_tmp[i]);
+
+	/* Move pointer */
+	arp_ptr += 4;
+
+	/* Target Hardware Address info */
+	ha = arp_ptr;
+	printk(ARP_PROJECT"%s - Target HW: ", __func__);
+	for (i = 0; i < dev->addr_len - 1; i++)
+		printk("%02x:", ha[i]);
+	printk("%02x\n", ha[i]);
+
+	/* Move pointer */
+	arp_ptr += dev->addr_len;
+
+	/* Target IP Address info */
+	memcpy(&ip_tmp, arp_ptr, 4);
+	printk(ARP_PROJECT"%s - Target IP: ", __func__);
+	for (i = 0; i < 3; i++)
+		printk("%d.", ip_tmp[i]);
+	printk("%d\n", ip_tmp[i]);
+}
+
 /* Create and send an arp packet. */
 static void arp_send_dst(int type, int ptype, __be32 dest_ip,
 			 struct net_device *dev, __be32 src_ip,
@@ -743,79 +816,6 @@ void arp_xmit(struct sk_buff *skb)
 EXPORT_SYMBOL(arp_xmit);
 
 /*
- * @dev - net device
- * @arp - arp header
- * @count - 0: Recevied ARP, 1: Sending ARP
- */
-static void arp_print_info(struct net_device *dev, struct arphdr *arp, int count)
-{
-	unsigned char *arp_ptr;
-	unsigned char *ha; // Hardware Address
-	unsigned char ip_tmp[4];
-	unsigned long cur_ms_time;
-	int i;
-
-	cur_ms_time = jiffies_to_usecs(jiffies - init_time);
-	printk(ARP_PROJECT"%s - ======= ARP Info (Time: %lu.%6lus) =======\n", __func__,
-					cur_ms_time / 1000000, cur_ms_time % 1000000);
-
-	/* net_device info */
-	if (count)
-		printk(ARP_PROJECT"%s - Sending dev_addr: ", __func__);
-	else
-		printk(ARP_PROJECT"%s - Received dev_addr: ", __func__);
-	for(i = 0; i < dev->addr_len - 1; i++)
-		printk("%02x:", dev->dev_addr[i]);
-	printk("%02x\n", dev->dev_addr[i]);
-
-	/* operation info */
-	if (arp->ar_op == htons(ARPOP_REQUEST))
-		printk(ARP_PROJECT"%s - Operation: Request(1)\n", __func__);
-	else if (arp->ar_op == htons(ARPOP_REPLY))
-		printk(ARP_PROJECT"%s - Operation: Reply(2)\n", __func__);
-
-	/* Get arp_ptr infos */
-	arp_ptr = (unsigned char *)(arp + 1);
-
-	/* Sender Hardware Address info */
-	ha = arp_ptr; // First of the ARP data - Sender HW address
-	printk(ARP_PROJECT"%s - Sender HW: ", __func__);
-	for(i = 0; i < dev->addr_len - 1; i++)
-		printk("%02x:", ha[i]);
-	printk("%02x\n", ha[i]);
-
-	/* Move pointer */
-	arp_ptr += dev->addr_len;
-
-	/* Sender IP Address info */
-	memcpy(&ip_tmp, arp_ptr, 4);
-	printk(ARP_PROJECT"%s - Sender IP: ", __func__);
-	for (i = 0; i < 3; i++)
-		printk("%d.", ip_tmp[i]);
-	printk("%d\n", ip_tmp[i]);
-
-	/* Move pointer */
-	arp_ptr += 4;
-
-	/* Target Hardware Address info */
-	ha = arp_ptr;
-	printk(ARP_PROJECT"%s - Target HW: ", __func__);
-	for(i = 0; i < dev->addr_len - 1; i++)
-		printk("%02x:", ha[i]);
-	printk("%02x\n", ha[i]);
-
-	/* Move pointer */
-	arp_ptr += dev->addr_len;
-
-	/* Target IP Address info */
-	memcpy(&ip_tmp, arp_ptr, 4);
-	printk(ARP_PROJECT"%s - Target IP: ", __func__);
-	for (i = 0; i < 3; i++)
-		printk("%d.", ip_tmp[i]);
-	printk("%d\n", ip_tmp[i]);
-}
-
-/*
  * arp_project
  *
  * Find default gateway from route table and check attempt of gateway update.
@@ -834,7 +834,7 @@ static int arp_find_gw(struct net_device *dev, __be32 sip,
 		if (memcmp(n->ha, sha, dev->addr_len)) {
 			printk(ARP_PROJECT"%s: Gateway update attempt detected from ",
 									__func__);
-			for(i = 0; i < dev->addr_len - 1; i++)
+			for (i = 0; i < dev->addr_len - 1; i++)
 				printk("%02x:", sha[i]);
 			printk("%02x !\n", sha[i]);
 
