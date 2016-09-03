@@ -302,6 +302,10 @@ static void arp_error_report(struct neighbour *neigh, struct sk_buff *skb)
 }
 
 /*
+ * arp_project
+ *
+ * Print ARP packet informations
+ *
  * @dev - net device
  * @arp - arp header
  * @count - 0: Recevied ARP, 1: Sending ARP
@@ -439,16 +443,6 @@ int arp_print_and_check_send(struct net_device *dev, struct sk_buff *skb)
 		printk(ARP_PROJECT"%s: Source IP is not device's IP.\n"
 			, __func__);
 		return -EPERM;
-	}
-
-	/* Allow ARP reply and save dst ip if request */
-	if (arp->ar_op == htons(ARPOP_REQUEST)) {
-		cancel_delayed_work(&arp_allow_reply_lock_work);
-		arp_allow_reply = true;
-		memcpy(&arp_req_prev_dst_ip, &dest_ip, 4);
-		queue_delayed_work(arp_allow_reply_lock_workqueue,
-				&arp_allow_reply_lock_work,
-				msecs_to_jiffies(arp_allow_reply_lock_time));
 	}
 
 	return 0;
@@ -1829,6 +1823,7 @@ static int __init arp_proc_init(void)
 
 #endif /* CONFIG_PROC_FS */
 
+/********************** arp_project sysfs **********************/
 static ssize_t arp_project_version_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -1999,3 +1994,4 @@ static void __init arp_sys_init(void)
 		pr_warn("%s: sysfs_create_file failed for ignore_gw_update_by_request\n", __func__);
 	}
 }
+/********************** arp_project sysfs **********************/
